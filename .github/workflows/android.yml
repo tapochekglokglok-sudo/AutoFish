@@ -29,16 +29,17 @@ jobs:
           test -s project/app/src/main/assets/tessdata/rus.traineddata
           test -s project/app/src/main/assets/tessdata/eng.traineddata
 
-      - name: Apply current AutoFish service and fix old source
+      - name: Apply updated AutoFish source
         run: |
           mkdir -p project/app/src/main/java/com/example/autofish
           cp autofish-src/app/src/main/java/com/example/autofish/FishAccessibilityService.kt project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
+          cp autofish-src/app/src/main/java/com/example/autofish/MainActivity.kt project/app/src/main/java/com/example/autofish/MainActivity.kt
           sed -i 's/it.recycle()/it.end()/g; s/tess?.recycle()/tess?.end()/g' project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
-          sed -i -E 's/textSize=([0-9]+)f?/textSize=\1f/g' project/app/src/main/java/com/example/autofish/MainActivity.kt
 
       - name: Configure Kotlin and OCR dependency
         run: |
           cd project
+          sed -i '/com.google.mlkit:text-recognition/d' app/build.gradle.kts
           echo 'dependencies { implementation("com.rmtheis:tess-two:9.1.0") }' >> app/build.gradle.kts
           echo 'tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions.jvmTarget = "1.8" }' >> app/build.gradle.kts
 
