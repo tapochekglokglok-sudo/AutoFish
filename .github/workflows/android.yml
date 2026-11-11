@@ -21,6 +21,27 @@ jobs:
       - name: Extract Android project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
+      - name: Add overlay permission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          manifest = Path("project/app/src/main/AndroidManifest.xml")
+          if not manifest.exists():
+              raise SystemExit("AndroidManifest.xml not found")
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+          android = "{http://schemas.android.com/apk/res/android}"
+          permission = "android.permission.SYSTEM_ALERT_WINDOW"
+          exists = any(node.tag == "uses-permission" and node.get(android + "name") == permission for node in root)
+          if not exists:
+              node = ET.Element("uses-permission")
+              node.set(android + "name", permission)
+              root.insert(0, node)
+          tree.write(manifest, encoding="utf-8", xml_declaration=True)
+          print("SYSTEM_ALERT_WINDOW permission is present")
+          PY
+
       - name: Install OCR language models
         run: |
           mkdir -p project/app/src/main/assets/tessdata
