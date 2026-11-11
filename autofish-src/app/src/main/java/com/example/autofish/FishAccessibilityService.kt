@@ -32,7 +32,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 class FishAccessibilityService : AccessibilityService() {
-    companion object { const val ACTION_REFRESH_OVERLAY = "com.example.autofish.REFRESH_OVERLAY" }
+    companion object { const val ACTION_REFRESH_OVERLAY = "com.example.autofish.REFRESH_OVERLAY"; const val ACTION_HIDE_OVERLAY = "com.example.autofish.HIDE_OVERLAY" }
     private enum class Stage { WAIT_CAST, HOLDING, WAIT_PERFECT, WAIT_FAST, FAST_TAP }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -52,12 +52,19 @@ class FishAccessibilityService : AccessibilityService() {
     private val prefs by lazy { getSharedPreferences("fish", MODE_PRIVATE) }
 
     private val refreshReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) = refreshOverlay()
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ACTION_HIDE_OVERLAY) {
+                stopAutomation()
+                removeBubble()
+            } else {
+                refreshOverlay()
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
-        val filter = IntentFilter(ACTION_REFRESH_OVERLAY)
+        val filter = IntentFilter(ACTION_REFRESH_OVERLAY).apply { addAction(ACTION_HIDE_OVERLAY) }
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(refreshReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -185,8 +192,14 @@ class FishAccessibilityService : AccessibilityService() {
     private fun processFrame(bitmap: Bitmap) {
         if (!prefs.getBoolean("automationEnabled",false)) return
         val text = try { tess?.setImage(bitmap); tess?.getUTF8Text()?.lowercase()?.replace('ё','е') ?: "" } catch (_:Exception) { "" }
+        val normalized = text.replace(Regex("[^\\p{L}]"), "")
+        val castPrompt = (normalized.contains("удерж") && normalized.contains("заброс")) ||
+            (normalized.contains("hold") && normalized.contains("cast"))
+        val perfectPrompt = normalized.contains("perfect")
+        val fastPrompt = (normalized.contains("нажим") && normalized.contains("быстро")) ||
+            (normalized.contains("tap") && normalized.contains("fast"))
         when(stage) {
-            Stage.WAIT_CAST -> if (text.contains("удерживайте") && text.contains("заброс")) {
+            Stage.WAIT_CAST -> if (castPrompt) {
                 resetTracking(); stage=Stage.HOLDING
                 longHold(55,55)
             }
@@ -194,10 +207,10 @@ class FishAccessibilityService : AccessibilityService() {
                 cancelHoldWithRelease(55,55)
                 stage=Stage.WAIT_PERFECT
             }
-            Stage.WAIT_PERFECT -> if (text.contains("perfect")) stage=Stage.WAIT_FAST
-            Stage.WAIT_FAST -> if (text.contains("нажимайте быстро") || (text.contains("нажимайте") && text.contains("быстро"))) { stage=Stage.FAST_TAP; lastTap=0L; fastMissFrames=0 }
+            Stage.WAIT_PERFECT -> if (perfectPrompt) stage=Stage.WAIT_FAST
+            Stage.WAIT_FAST -> if (fastPrompt) { stage=Stage.FAST_TAP; lastTap=0L; fastMissFrames=0 }
             Stage.FAST_TAP -> {
-                if (text.contains("нажимайте быстро") || (text.contains("нажимайте") && text.contains("быстро"))) {
+                if (fastPrompt) {
                     fastMissFrames=0
                     val now=System.currentTimeMillis()
                     if (now-lastTap>=55) { tapAt(55,55,35); lastTap=now }
