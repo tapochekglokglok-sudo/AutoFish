@@ -30,6 +30,14 @@ class FishAccessibilityService : AccessibilityService() {
     private var lastPromptSeen = 0L
     private var lastCast = 0L
     private var targetY = -1
+    private val rapidTap = object : Runnable {
+        override fun run() {
+            if (phase != Phase.TAPPING) return
+            val prefs = getSharedPreferences("fish", MODE_PRIVATE)
+            tap(prefs.getInt("tapX", 50), prefs.getInt("tapY", 80), 22L)
+            handler.postDelayed(this, 45L)
+        }
+    }
     private var screenW = 0
     private var screenH = 0
 
@@ -92,21 +100,19 @@ class FishAccessibilityService : AccessibilityService() {
                         if (text.contains("Perfect", ignoreCase = true)) {
                             phase = Phase.TAPPING
                             lastPromptSeen = now
-                            lastTap = 0L
+                            handler.removeCallbacks(rapidTap)
+                            handler.post(rapidTap)
                         } else if (now - lastCast > 18000L) {
                             // Safety timeout: do not leave a long press running indefinitely.
                             releaseHold()
                             phase = Phase.WAIT_CAST
+                            handler.removeCallbacks(rapidTap)
                             lastCast = now
                         }
                     }
                     Phase.TAPPING -> {
                         if (text.contains(cue, ignoreCase = true)) {
                             lastPromptSeen = now
-                            if (now - lastTap >= 42L) {
-                                tap(prefs.getInt("tapX", 50), prefs.getInt("tapY", 80), 22L)
-                                lastTap = now
-                            }
                         } else if (now - lastPromptSeen > 700L) {
                             phase = Phase.WAIT_CAST
                             lastCast = now
