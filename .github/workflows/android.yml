@@ -19,6 +19,15 @@ jobs:
       - name: Extract project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
+      - name: Inspect app source
+        run: |
+          echo '===== MainActivity.kt ====='
+          cat project/app/src/main/java/com/example/autofish/MainActivity.kt
+          echo '===== FishAccessibilityService.kt ====='
+          cat project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt 2>/dev/null || true
+          echo '===== FishAccessibilityService.kt candidates ====='
+          find project/app/src/main -type f | sort
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
