@@ -23,6 +23,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.accessibilityservice.GestureDescription
 import android.provider.Settings
 import android.widget.TextView
+import android.widget.Toast
 import com.googlecode.tesseract.android.TessBaseAPI
 import java.io.File
 import java.io.FileOutputStream
@@ -132,18 +133,24 @@ class FishAccessibilityService : AccessibilityService() {
             contentDescription = "AutoFish: нажмите для запуска или остановки"
         }
         view.setOnTouchListener(object : View.OnTouchListener {
-            var downX = 0f; var downY = 0f; var originX = 0; var originY = 0; var moved = false
+            var downX = 0f; var downY = 0f; var originX = 0; var originY = 0; var moved = false; var downAt = 0L
             val threshold = 8 * resources.displayMetrics.density
             override fun onTouch(v: View, e: MotionEvent): Boolean {
                 when (e.action) {
-                    MotionEvent.ACTION_DOWN -> { downX=e.rawX; downY=e.rawY; originX=params.x; originY=params.y; moved=false }
+                    MotionEvent.ACTION_DOWN -> { downX=e.rawX; downY=e.rawY; originX=params.x; originY=params.y; downAt=System.currentTimeMillis(); moved=false }
                     MotionEvent.ACTION_MOVE -> {
                         val dx=e.rawX-downX; val dy=e.rawY-downY
                         if (abs(dx)>threshold || abs(dy)>threshold) moved=true
                         if (moved) { params.x=(originX+dx.toInt()).coerceAtLeast(0); params.y=(originY+dy.toInt()).coerceAtLeast(0); try { wm.updateViewLayout(view,params) } catch (_:Exception) {} }
                     }
                     MotionEvent.ACTION_UP -> if (!moved) {
-                        if (prefs.getBoolean("automationEnabled",false)) stopAutomation() else startAutomation()
+                        if (System.currentTimeMillis() - downAt >= 650L) {
+                            val active = recording
+                            if (active) stopRecording() else startRecording()
+                            Toast.makeText(this@FishAccessibilityService, if (active) "Запись остановлена" else "Запись кадров началась", Toast.LENGTH_SHORT).show()
+                        } else {
+                            if (prefs.getBoolean("automationEnabled",false)) stopAutomation() else startAutomation()
+                        }
                         updateBubble()
                     }
                 }
