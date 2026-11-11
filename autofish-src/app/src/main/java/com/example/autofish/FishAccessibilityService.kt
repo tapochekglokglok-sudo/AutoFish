@@ -196,13 +196,22 @@ class FishAccessibilityService : AccessibilityService() {
             if (Build.VERSION.SDK_INT < 30 || !busy.compareAndSet(false,true)) { schedule(100); return }
             takeScreenshot(Display.DEFAULT_DISPLAY,mainExecutor,object:TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
-                    val buffer=result.hardwareBuffer
-                    val wrapped=Bitmap.wrapHardwareBuffer(buffer,result.colorSpace)
-                    buffer.close()
-                    if (wrapped==null) { busy.set(false); schedule(150); return }
-                    val bmp=wrapped.copy(Bitmap.Config.ARGB_8888,false); wrapped.recycle()
-                    handler.post {
-                        try { processFrame(bmp) } finally { bmp.recycle(); busy.set(false); schedule(if(stage==Stage.FAST_TAP) 70 else 180) }
+                    try {
+                        val buffer=result.hardwareBuffer
+                        val wrapped=Bitmap.wrapHardwareBuffer(buffer,result.colorSpace)
+                        buffer.close()
+                        if (wrapped==null) { busy.set(false); schedule(150); return }
+                        val bmp=wrapped.copy(Bitmap.Config.ARGB_8888,false)
+                        wrapped.recycle()
+                        handler.post {
+                            try { processFrame(bmp) }
+                            catch (e: Exception) { logEvent("Ошибка обработки кадра: " + (e.message ?: "неизвестная")) }
+                            finally { bmp.recycle(); busy.set(false); schedule(if(stage==Stage.FAST_TAP) 70 else 180) }
+                        }
+                    } catch (e: Exception) {
+                        busy.set(false)
+                        logEvent("Ошибка снимка: " + (e.message ?: "неизвестная"))
+                        schedule(300)
                     }
                 }
                 override fun onFailure(errorCode: Int) { busy.set(false); schedule(250) }
