@@ -41,7 +41,34 @@ class FishAccessibilityService : AccessibilityService() {
     private var screenW = 0
     private var screenH = 0
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Some game UI labels are exposed through the accessibility tree.
+        if (phase == Phase.WAIT_CAST && event?.text?.any { isCastPrompt(it.toString()) } == true) {
+            startHold()
+        }
+    }
+
+    private fun isCastPrompt(value: String): Boolean {
+        val normalized = value.lowercase()
+            .replace('ё', 'е')
+            .replace(Regex("[^а-я\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return normalized.contains("удерживайте") && normalized.contains("забросить")
+    }
+
+    private fun hasCastPrompt(): Boolean {
+        fun scan(node: android.view.accessibility.AccessibilityNodeInfo?): Boolean {
+            if (node == null) return false
+            if (isCastPrompt(node.text?.toString().orEmpty()) ||
+                isCastPrompt(node.contentDescription?.toString().orEmpty())) return true
+            for (i in 0 until node.childCount) {
+                if (scan(node.getChild(i))) return true
+            }
+            return false
+        }
+        return scan(rootInActiveWindow)
+    }
     override fun onInterrupt() { stopLoop() }
     override fun onServiceConnected() { handler.post(loop) }
     override fun onDestroy() { stopLoop(); super.onDestroy() }
@@ -83,7 +110,8 @@ class FishAccessibilityService : AccessibilityService() {
 
                 when (phase) {
                     Phase.WAIT_CAST -> {
-                        if (now - lastCast > 2200L) startHold()
+                        // Do not cast on a timer: wait for the game's Russian cast prompt.
+                        if (hasCastPrompt()) startHold()
                     }
                     Phase.HOLDING -> {
                         val geometry = detectVial(bitmap)
