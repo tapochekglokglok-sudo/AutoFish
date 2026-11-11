@@ -2,243 +2,310 @@ package com.example.autofish
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
-import android.accessibilityservice.GestureDescription
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Path
-import android.hardware.HardwareBuffer
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Display
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import android.accessibilityservice.GestureDescription
+import android.provider.Settings
+import android.widget.TextView
+import com.googlecode.tesseract.android.TessBaseAPI
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 class FishAccessibilityService : AccessibilityService() {
+    companion object { const val ACTION_REFRESH_OVERLAY = "com.example.autofish.REFRESH_OVERLAY" }
+    private enum class Stage { WAIT_CAST, HOLDING, WAIT_PERFECT, WAIT_FAST, FAST_TAP }
+
     private val handler = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
-    private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
-
-    private enum class Phase { WAIT_CAST, HOLDING, WAIT_PERFECT, TAPPING }
-    private var phase = Phase.WAIT_CAST
-    private var holdStarted = false
+    private var stage = Stage.WAIT_CAST
     private var lastTap = 0L
-    private var lastPromptSeen = 0L
-    private var lastCast = 0L
-    private var targetY = -1
-    private val rapidTap = object : Runnable {
-        override fun run() {
-            if (phase != Phase.TAPPING) return
-            val prefs = getSharedPreferences("fish", MODE_PRIVATE)
-            tap(prefs.getInt("tapX", 50), prefs.getInt("tapY", 80), 22L)
-            handler.postDelayed(this, 45L)
+    private var lastMarkerY = -1
+    private var lastMarkerAt = 0L
+    private var stableTargetTop = -1
+    private var stableTargetBottom = -1
+    private var targetStableFrames = 0
+    private var fastMissFrames = 0
+    private var windowManager: WindowManager? = null
+    private var bubble: TextView? = null
+    private var receiverRegistered = false
+    private var tess: TessBaseAPI? = null
+    private val prefs by lazy { getSharedPreferences("fish", MODE_PRIVATE) }
+
+    private val refreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = refreshOverlay()
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val filter = IntentFilter(ACTION_REFRESH_OVERLAY)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(refreshReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(refreshReceiver, filter)
         }
+        receiverRegistered = true
     }
-    private var screenW = 0
-    private var screenH = 0
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Some game UI labels are exposed through the accessibility tree.
-        if (phase == Phase.WAIT_CAST && event?.text?.any { isCastPrompt(it.toString()) } == true) {
-            startHold()
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt() = stopAutomation()
+    override fun onServiceConnected() { super.onServiceConnected(); initOcr(); refreshOverlay() }
+
+    private fun initOcr() {
+        if (tess != null) return
+        try {
+            val root = File(filesDir, "autofish_ocr")
+            val data = File(root, "tessdata")
+            data.mkdirs()
+            val trained = File(data, "rus.traineddata")
+            val english = File(data, "eng.traineddata")
+            if (!trained.exists()) assets.open("tessdata/rus.traineddata").use { input -> FileOutputStream(trained).use { input.copyTo(it) } }
+            if (!english.exists()) assets.open("tessdata/eng.traineddata").use { input -> FileOutputStream(english).use { input.copyTo(it) } }
+            tess = TessBaseAPI().also { if (!it.init(root.absolutePath, "rus+eng")) { it.recycle(); tess = null } }
+        } catch (_: Exception) { tess = null }
+    }
+
+    override fun onDestroy() {
+        stopAutomation(); removeBubble(); tess?.recycle(); tess = null
+        if (receiverRegistered) unregisterReceiver(refreshReceiver)
+        super.onDestroy()
+    }
+
+    private fun refreshOverlay() {
+        if (!Settings.canDrawOverlays(this)) { removeBubble(); stopAutomation(); return }
+        if (bubble == null) createBubble()
+        updateBubble()
+        if (prefs.getBoolean("automationEnabled", false)) startAutomation() else stopAutomation()
+    }
+
+    private fun createBubble() {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        windowManager = wm
+        val size = (58 * resources.displayMetrics.density).toInt()
+        val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
+        params.gravity = Gravity.TOP or Gravity.START
+        params.x = (resources.displayMetrics.widthPixels - size - 10).coerceAtLeast(0)
+        params.y = (resources.displayMetrics.heightPixels / 2 - size / 2).coerceAtLeast(0)
+        val view = TextView(this).apply {
+            text = "AF"; textSize = 16f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            background = bubbleBackground(false)
+            contentDescription = "AutoFish: нажмите для запуска или остановки"
         }
-    }
-
-    private fun isCastPrompt(value: String): Boolean {
-        val normalized = value.lowercase()
-            .replace('ё', 'е')
-            .replace(Regex("[^а-я\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        return normalized.contains("удерживайте") && normalized.contains("забросить")
-    }
-
-    private fun hasCastPrompt(): Boolean {
-        fun scan(node: android.view.accessibility.AccessibilityNodeInfo?): Boolean {
-            if (node == null) return false
-            if (isCastPrompt(node.text?.toString().orEmpty()) ||
-                isCastPrompt(node.contentDescription?.toString().orEmpty())) return true
-            for (i in 0 until node.childCount) {
-                if (scan(node.getChild(i))) return true
+        view.setOnTouchListener(object : View.OnTouchListener {
+            var downX = 0f; var downY = 0f; var originX = 0; var originY = 0; var moved = false
+            val threshold = 8 * resources.displayMetrics.density
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> { downX=e.rawX; downY=e.rawY; originX=params.x; originY=params.y; moved=false }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx=e.rawX-downX; val dy=e.rawY-downY
+                        if (abs(dx)>threshold || abs(dy)>threshold) moved=true
+                        if (moved) { params.x=(originX+dx.toInt()).coerceAtLeast(0); params.y=(originY+dy.toInt()).coerceAtLeast(0); try { wm.updateViewLayout(view,params) } catch (_:Exception) {} }
+                    }
+                    MotionEvent.ACTION_UP -> if (!moved) {
+                        if (prefs.getBoolean("automationEnabled",false)) stopAutomation() else startAutomation()
+                        updateBubble()
+                    }
+                }
+                return true
             }
-            return false
-        }
-        return scan(rootInActiveWindow)
+        })
+        try { wm.addView(view,params); bubble=view } catch (_:Exception) { bubble=null }
     }
-    override fun onInterrupt() { stopLoop() }
-    override fun onServiceConnected() { handler.post(loop) }
-    override fun onDestroy() { stopLoop(); super.onDestroy() }
 
-    private fun stopLoop() {
+    private fun bubbleBackground(enabled: Boolean) = GradientDrawable().apply {
+        shape=GradientDrawable.OVAL
+        setColor(if (enabled) Color.rgb(22,163,74) else Color.rgb(55,65,81))
+        setStroke((2*resources.displayMetrics.density).toInt(),Color.WHITE)
+    }
+    private fun updateBubble() {
+        bubble?.let {
+            val enabled=prefs.getBoolean("automationEnabled",false)
+            it.text=if(enabled) "ON" else "AF"; it.background=bubbleBackground(enabled)
+            it.contentDescription=if(enabled) "AutoFish включён. Нажмите, чтобы остановить" else "AutoFish выключен. Нажмите, чтобы запустить"
+        }
+    }
+    private fun removeBubble() { bubble?.let { try { windowManager?.removeView(it) } catch (_:Exception) {} }; bubble=null }
+
+    private fun startAutomation() {
+        if (!Settings.canDrawOverlays(this)) return
+        initOcr()
+        prefs.edit().putBoolean("automationEnabled",true).apply()
+        resetTracking(); stage=Stage.WAIT_CAST; updateBubble(); handler.removeCallbacks(loop); handler.post(loop)
+    }
+    private fun stopAutomation() {
+        val wasHolding = stage == Stage.HOLDING
+        prefs.edit().putBoolean("automationEnabled",false).apply()
         handler.removeCallbacks(loop)
-        busy.set(false)
+        if (wasHolding) tapAt(55,55,40)
+        resetTracking(); stage=Stage.WAIT_CAST; updateBubble()
     }
 
     private val loop = object : Runnable {
         override fun run() {
-            if (Build.VERSION.SDK_INT >= 30 && busy.compareAndSet(false, true)) {
-                takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-                    override fun onSuccess(result: ScreenshotResult) {
-                        val buffer = result.hardwareBuffer
-                        val wrapped = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
-                        buffer.close()
-                        if (wrapped == null) { busy.set(false); return }
-                        val bitmap = wrapped.copy(Bitmap.Config.ARGB_8888, false)
-                        wrapped.recycle()
-                        screenW = bitmap.width
-                        screenH = bitmap.height
-                        inspect(bitmap)
-                    }
-                    override fun onFailure(errorCode: Int) { busy.set(false) }
-                })
-            }
-            handler.postDelayed(this, 85L)
-        }
-    }
-
-    private fun inspect(bitmap: Bitmap) {
-        val prefs = getSharedPreferences("fish", MODE_PRIVATE)
-        val cue = prefs.getString("prompt", "Нажимайте быстро!") ?: "Нажимайте быстро!"
-        recognizer.process(InputImage.fromBitmap(bitmap, 0))
-            .addOnSuccessListener { visionText ->
-                val text = visionText.text
-                val now = System.currentTimeMillis()
-
-                when (phase) {
-                    Phase.WAIT_CAST -> {
-                        // Do not cast on a timer: wait for the game's Russian cast prompt.
-                        if (hasCastPrompt()) startHold()
-                    }
-                    Phase.HOLDING -> {
-                        val geometry = detectVial(bitmap)
-                        if (geometry != null) {
-                            targetY = geometry.first
-                            val edgeY = geometry.second
-                            if (abs(edgeY - targetY) <= max(5, screenH / 100)) {
-                                releaseHold()
-                                phase = Phase.WAIT_PERFECT
-                            }
-                        }
-                    }
-                    Phase.WAIT_PERFECT -> {
-                        if (text.contains("Perfect", ignoreCase = true)) {
-                            phase = Phase.TAPPING
-                            lastPromptSeen = now
-                            handler.removeCallbacks(rapidTap)
-                            handler.post(rapidTap)
-                        } else if (now - lastCast > 18000L) {
-                            // Safety timeout: do not leave a long press running indefinitely.
-                            releaseHold()
-                            phase = Phase.WAIT_CAST
-                            handler.removeCallbacks(rapidTap)
-                            lastCast = now
-                        }
-                    }
-                    Phase.TAPPING -> {
-                        if (text.contains(cue, ignoreCase = true)) {
-                            lastPromptSeen = now
-                        } else if (now - lastPromptSeen > 700L) {
-                            phase = Phase.WAIT_CAST
-                            lastCast = now
-                        }
+            if (!prefs.getBoolean("automationEnabled",false)) return
+            if (Build.VERSION.SDK_INT < 30 || !busy.compareAndSet(false,true)) { schedule(100); return }
+            takeScreenshot(Display.DEFAULT_DISPLAY,mainExecutor,object:TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    val buffer=result.hardwareBuffer
+                    val wrapped=Bitmap.wrapHardwareBuffer(buffer,result.colorSpace)
+                    buffer.close()
+                    if (wrapped==null) { busy.set(false); schedule(150); return }
+                    val bmp=wrapped.copy(Bitmap.Config.ARGB_8888,false); wrapped.recycle()
+                    handler.post {
+                        try { processFrame(bmp) } finally { bmp.recycle(); busy.set(false); schedule(if(stage==Stage.FAST_TAP) 70 else 180) }
                     }
                 }
-            }
-            .addOnCompleteListener {
-                bitmap.recycle()
-                busy.set(false)
-            }
-    }
-
-    // Returns the row of the stationary yellow target and the strongest vertical fill edge.
-    private fun detectVial(bitmap: Bitmap): Pair<Int, Int>? {
-        val w = bitmap.width
-        val h = bitmap.height
-        val xCenter = (w * 0.55f).toInt().coerceIn(2, w - 3)
-        val halfWidth = max(2, w / 180)
-        val yStart = (h * 0.12f).toInt()
-        val yEnd = (h * 0.88f).toInt()
-
-        var bestYellowY = -1
-        var bestYellowScore = 0
-        for (y in yStart until yEnd) {
-            var score = 0
-            for (x in (xCenter - halfWidth)..(xCenter + halfWidth)) {
-                val c = bitmap.getPixel(x, y)
-                val r = (c shr 16) and 255
-                val g = (c shr 8) and 255
-                val b = c and 255
-                if (r > 150 && g > 125 && b < 150 && r > b * 1.20f) score++
-            }
-            if (score > bestYellowScore) {
-                bestYellowScore = score
-                bestYellowY = y
-            }
-        }
-        if (bestYellowY < 0 || bestYellowScore < max(2, halfWidth)) return null
-
-        var edgeY = -1
-        var bestEdge = 0
-        for (y in (yStart + 1) until yEnd) {
-            // Ignore the yellow target itself when looking for the liquid boundary.
-            if (abs(y - bestYellowY) < h / 35) continue
-            var delta = 0
-            for (x in (xCenter - halfWidth)..(xCenter + halfWidth)) {
-                val a = bitmap.getPixel(x, y - 1)
-                val b = bitmap.getPixel(x, y)
-                delta += abs(((a shr 16) and 255) - ((b shr 16) and 255))
-                delta += abs(((a shr 8) and 255) - ((b shr 8) and 255))
-                delta += abs((a and 255) - (b and 255))
-            }
-            if (delta > bestEdge) {
-                bestEdge = delta
-                edgeY = y
-            }
-        }
-        if (edgeY < 0 || bestEdge < halfWidth * 45) return null
-        return Pair(bestYellowY, edgeY)
-    }
-
-    private fun startHold() {
-        if (holdStarted) return
-        val dm = resources.displayMetrics
-        val x = dm.widthPixels * 0.50f
-        val y = dm.heightPixels * 0.50f
-        val path = Path().apply { moveTo(x, y); lineTo(x + 0.1f, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 60000L))
-            .build()
-        holdStarted = dispatchGesture(gesture, null, null)
-        if (holdStarted) {
-            phase = Phase.HOLDING
-            lastCast = System.currentTimeMillis()
+                override fun onFailure(errorCode: Int) { busy.set(false); schedule(250) }
+            })
         }
     }
 
-    private fun releaseHold() {
-        if (!holdStarted) return
-        // A new gesture cancels the long stroke and releases the held pointer.
-        val dm = resources.displayMetrics
-        val path = Path().apply { moveTo(dm.widthPixels * 0.50f, dm.heightPixels * 0.50f) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 25L))
-            .build()
-        dispatchGesture(gesture, null, null)
-        holdStarted = false
+    private fun processFrame(bitmap: Bitmap) {
+        if (!prefs.getBoolean("automationEnabled",false)) return
+        val text = try { tess?.setImage(bitmap); tess?.getUTF8Text()?.lowercase()?.replace('ё','е') ?: "" } catch (_:Exception) { "" }
+        when(stage) {
+            Stage.WAIT_CAST -> if (text.contains("удерживайте") && text.contains("заброс")) {
+                resetTracking(); stage=Stage.HOLDING
+                longHold(55,55)
+            }
+            Stage.HOLDING -> if (yellowIndicatorOverlap(bitmap)) {
+                cancelHoldWithRelease(55,55)
+                stage=Stage.WAIT_PERFECT
+            }
+            Stage.WAIT_PERFECT -> if (text.contains("perfect")) stage=Stage.WAIT_FAST
+            Stage.WAIT_FAST -> if (text.contains("нажимайте быстро") || (text.contains("нажимайте") && text.contains("быстро"))) { stage=Stage.FAST_TAP; lastTap=0L; fastMissFrames=0 }
+            Stage.FAST_TAP -> {
+                if (text.contains("нажимайте быстро") || (text.contains("нажимайте") && text.contains("быстро"))) {
+                    fastMissFrames=0
+                    val now=System.currentTimeMillis()
+                    if (now-lastTap>=55) { tapAt(55,55,35); lastTap=now }
+                } else {
+                    fastMissFrames++
+                    if (fastMissFrames>=5) { stage=Stage.WAIT_CAST; resetTracking() }
+                }
+            }
+        }
     }
 
-    private fun tap(px: Int, py: Int, duration: Long) {
-        val dm = resources.displayMetrics
-        val x = dm.widthPixels * px.coerceIn(0, 100) / 100f
-        val y = dm.heightPixels * py.coerceIn(0, 100) / 100f
-        val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, duration))
-            .build()
-        dispatchGesture(gesture, null, null)
+    // Yellow target is stationary; the moving marker is tracked separately across frames.
+    private fun yellowIndicatorOverlap(b: Bitmap): Boolean {
+        val h=b.height
+        val xCenter=(b.width*0.55f).toInt().coerceIn(0,b.width-1)
+        val halfWidth=max(4,(b.width*0.018f).toInt())
+        val x0=max(0,xCenter-halfWidth); val x1=min(b.width-1,xCenter+halfWidth)
+        val y0=(h*0.12f).toInt(); val y1=(h*0.90f).toInt()
+        val width=x1-x0+1
+        val yellowRows=BooleanArray(h)
+        for(y in y0 until y1) {
+            var count=0
+            for(x in x0..x1) if(isYellow(b.getPixel(x,y))) count++
+            yellowRows[y]=count>=max(3,(width*0.22f).toInt())
+        }
+        var bestTop=-1; var bestBottom=-1; var runTop=-1
+        for(y in y0 until y1) {
+            if(yellowRows[y]) {
+                if(runTop<0) runTop=y
+            } else if(runTop>=0) {
+                val bottom=y-1
+                if(bottom-runTop>bestBottom-bestTop) { bestTop=runTop; bestBottom=bottom }
+                runTop=-1
+            }
+        }
+        if(runTop>=0 && y1-1-runTop>bestBottom-bestTop) { bestTop=runTop; bestBottom=y1-1 }
+        if(bestTop<0 || bestBottom-bestTop !in 2..(h*0.12f).toInt()) {
+            targetStableFrames=0; stableTargetTop=-1; stableTargetBottom=-1; lastMarkerY=-1
+            return false
+        }
+        if(stableTargetTop>=0 && abs(bestTop-stableTargetTop)<=3 && abs(bestBottom-stableTargetBottom)<=3) {
+            targetStableFrames++
+        } else {
+            targetStableFrames=1
+            stableTargetTop=bestTop; stableTargetBottom=bestBottom
+            lastMarkerY=-1
+        }
+        if(targetStableFrames<2) return false
+
+        val markerRows=BooleanArray(h)
+        for(y in y0 until y1) {
+            var count=0
+            for(x in x0..x1) {
+                val c=b.getPixel(x,y)
+                if(!isYellow(c) && isMarkerPixel(c)) count++
+            }
+            markerRows[y]=count>=max(3,(width*0.18f).toInt())
+        }
+        var candidateY=-1; var candidateStrength=0; var y=y0
+        while(y<y1) {
+            if(!markerRows[y]) { y++; continue }
+            val top=y
+            var strength=0
+            while(y<y1 && markerRows[y]) {
+                for(x in x0..x1) { val c=b.getPixel(x,y); if(!isYellow(c) && isMarkerPixel(c)) strength++ }
+                y++
+            }
+            val center=(top+y-1)/2
+            val nearPrevious=lastMarkerY<0 || abs(center-lastMarkerY)<=max(24,(h*0.10f).toInt())
+            if(nearPrevious && y-top<=max(12,(h*0.025f).toInt()) && strength>candidateStrength) {
+                candidateY=center; candidateStrength=strength
+            }
+        }
+        if(candidateY<0) return false
+        val now=System.currentTimeMillis()
+        val wasMoving=lastMarkerY>=0 && now-lastMarkerAt<900 && abs(candidateY-lastMarkerY)>=1
+        lastMarkerY=candidateY; lastMarkerAt=now
+        val padding=max(3,(bestBottom-bestTop)/2)
+        return wasMoving && candidateY in (bestTop-padding)..(bestBottom+padding)
     }
+
+    private fun isYellow(c:Int):Boolean {
+        val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+        return r>185 && g>145 && b<125 && r>g*1.03
+    }
+    private fun isMarkerPixel(c:Int):Boolean {
+        val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+        val hi=max(r,max(g,b)); val lo=min(r,min(g,b))
+        val saturation=hi-lo
+        return (lo>185 && saturation<75) || (saturation>75 && hi>125)
+    }
+    private fun resetTracking() {
+        lastMarkerY=-1; lastMarkerAt=0L
+        stableTargetTop=-1; stableTargetBottom=-1; targetStableFrames=0
+        fastMissFrames=0
+    }
+
+    private fun longHold(px:Int,py:Int) {
+        val p=point(px,py)
+        val g=GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p,0,60000)).build()
+        dispatchGesture(g,null,null)
+    }
+    private fun cancelHoldWithRelease(px:Int,py:Int) { tapAt(px,py,40) }
+    private fun point(px:Int,py:Int)=Path().apply { moveTo(resources.displayMetrics.widthPixels*px/100f,resources.displayMetrics.heightPixels*py/100f) }
+    private fun tapAt(px:Int,py:Int,duration:Long) {
+        val p=point(px,py)
+        val g=GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p,0,duration)).build()
+        dispatchGesture(g,null,null)
+    }
+    private fun schedule(delay:Long) { if(prefs.getBoolean("automationEnabled",false)) handler.postDelayed(loop,delay) }
 }
