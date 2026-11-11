@@ -80,7 +80,13 @@ class FishAccessibilityService : AccessibilityService() {
         receiverRegistered = true
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val pkg = event?.packageName?.toString() ?: return
+        if (pkg.contains("roblox", true) && prefs.getBoolean("autoStartRoblox", false) && !prefs.getBoolean("automationEnabled", false)) {
+            logEvent("Обнаружен Roblox — автоматический запуск")
+            startAutomation()
+        }
+    }
     override fun onInterrupt() = stopAutomation()
     override fun onServiceConnected() { super.onServiceConnected(); initOcr(); refreshOverlay() }
 
@@ -165,6 +171,7 @@ class FishAccessibilityService : AccessibilityService() {
         if (!Settings.canDrawOverlays(this)) return
         initOcr()
         prefs.edit().putBoolean("automationEnabled",true).apply()
+        logEvent("Автоматизация включена")
         resetTracking(); stage=Stage.WAIT_CAST; updateBubble(); handler.removeCallbacks(loop); handler.post(loop)
     }
     private fun stopAutomation() {
@@ -172,6 +179,7 @@ class FishAccessibilityService : AccessibilityService() {
         prefs.edit().putBoolean("automationEnabled",false).apply()
         handler.removeCallbacks(loop)
         if (wasHolding) tapAt(55,55,40)
+        logEvent("Автоматизация остановлена")
         resetTracking(); stage=Stage.WAIT_CAST; updateBubble()
     }
 
@@ -252,15 +260,17 @@ class FishAccessibilityService : AccessibilityService() {
             (normalized.contains("tap") && normalized.contains("fast"))
         when(stage) {
             Stage.WAIT_CAST -> if (castPrompt) {
+                logEvent("Найдена подсказка заброса")
                 resetTracking(); stage=Stage.HOLDING
                 longHold(55,55)
             }
             Stage.HOLDING -> if (yellowIndicatorOverlap(bitmap)) {
+                logEvent("Маркер достиг сектора")
                 cancelHoldWithRelease(55,55)
                 stage=Stage.WAIT_PERFECT
             }
-            Stage.WAIT_PERFECT -> if (perfectPrompt) stage=Stage.WAIT_FAST
-            Stage.WAIT_FAST -> if (fastPrompt) { stage=Stage.FAST_TAP; lastTap=0L; fastMissFrames=0 }
+            Stage.WAIT_PERFECT -> if (perfectPrompt) { logEvent("Распознано PERFECT"); stage=Stage.WAIT_FAST }
+            Stage.WAIT_FAST -> if (fastPrompt) { logEvent("Начат этап быстрых нажатий"); stage=Stage.FAST_TAP; lastTap=0L; fastMissFrames=0 }
             Stage.FAST_TAP -> {
                 if (fastPrompt) {
                     fastMissFrames=0
@@ -268,7 +278,7 @@ class FishAccessibilityService : AccessibilityService() {
                     if (now-lastTap>=55) { tapAt(55,55,35); lastTap=now }
                 } else {
                     fastMissFrames++
-                    if (fastMissFrames>=5) { stage=Stage.WAIT_CAST; resetTracking() }
+                    if (fastMissFrames>=5) { logEvent("Этап завершён или подсказка исчезла"); stage=Stage.WAIT_CAST; resetTracking() }
                 }
             }
         }
@@ -354,6 +364,13 @@ class FishAccessibilityService : AccessibilityService() {
         val saturation=hi-lo
         return (lo>185 && saturation<75) || (saturation>75 && hi>125)
     }
+    private fun logEvent(message: String) {
+        val old = prefs.getString("eventLog", "") ?: ""
+        val line = System.currentTimeMillis().toString() + " | " + message
+        val entries = (old.lines().filter { it.isNotBlank() } + line).takeLast(80)
+        prefs.edit().putString("eventLog", entries.joinToString("\n")).putString("lastEvent", message).apply()
+    }
+
     private fun resetTracking() {
         lastMarkerY=-1; lastMarkerAt=0L
         stableTargetTop=-1; stableTargetBottom=-1; targetStableFrames=0
