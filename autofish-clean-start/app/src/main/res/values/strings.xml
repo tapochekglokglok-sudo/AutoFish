@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AutoFish</string>
+    <string name="accessibility_description">Сервис управления жестами AutoFish</string>
+</resources>
