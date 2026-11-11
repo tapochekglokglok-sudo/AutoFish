@@ -96,6 +96,23 @@ jobs:
           mkdir -p project/app/src/main/java/com/example/autofish
           cp autofish-src/app/src/main/java/com/example/autofish/FishAccessibilityService.kt project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
           cp autofish-src/app/src/main/java/com/example/autofish/MainActivity.kt project/app/src/main/java/com/example/autofish/MainActivity.kt
+          cp autofish-src/app/src/main/java/com/example/autofish/CaptureToolsActivity.kt project/app/src/main/java/com/example/autofish/CaptureToolsActivity.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          manifest = Path("project/app/src/main/AndroidManifest.xml")
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+          ns = "{http://schemas.android.com/apk/res/android}"
+          app = root.find("application")
+          if not any(x.get(ns + "name") == ".CaptureToolsActivity" for x in app.findall("activity")):
+              node = ET.SubElement(app, "activity")
+              node.set(ns + "name", ".CaptureToolsActivity")
+              node.set(ns + "exported", "false")
+              node.set(ns + "label", "Инструменты AutoFish")
+          tree.write(manifest, encoding="utf-8", xml_declaration=True)
+          print("Capture tools activity registered")
+          PY
           sed -i 's/it.recycle()/it.end()/g; s/tess?.recycle()/tess?.end()/g' project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
 
       - name: Configure Kotlin and OCR dependency
