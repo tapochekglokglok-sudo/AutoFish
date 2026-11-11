@@ -48,6 +48,7 @@ jobs:
       - name: Build debug APK
         run: |
           cd project
+          echo 'tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions.jvmTarget = "1.8" }' >> app/build.gradle.kts
           gradle --no-daemon assembleDebug
 
       - name: Upload APK
