@@ -21,6 +21,26 @@ jobs:
       - name: Extract Android project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
+      - name: Install custom app icon
+        run: |
+          mkdir -p project/app/src/main/res/drawable
+          cp autofish-src/app/src/main/res/drawable/ic_launcher.xml project/app/src/main/res/drawable/ic_launcher.xml
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          manifest = Path("project/app/src/main/AndroidManifest.xml")
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+          android = "{http://schemas.android.com/apk/res/android}"
+          app = root.find("application")
+          if app is None:
+              raise SystemExit("application element not found in AndroidManifest.xml")
+          app.set(android + "icon", "@drawable/ic_launcher")
+          app.set(android + "roundIcon", "@drawable/ic_launcher")
+          tree.write(manifest, encoding="utf-8", xml_declaration=True)
+          print("Custom AutoFish launcher icon configured")
+          PY
+
       - name: Add overlay permission
         run: |
           python3 - <<'PY'
