@@ -94,6 +94,10 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, params(0, 9))
         page.addView(actionButton("Обновить состояние", panelAlt) { refreshStatus() }, params(0, 18))
+        page.addView(actionButton("Остановить и убрать AF", Color.rgb(127, 29, 29)) {
+            sendBroadcast(Intent(FishAccessibilityService.ACTION_HIDE_OVERLAY).setPackage(packageName))
+            updateStatus()
+        }, params(0, 18))
 
         page.addView(label("КАК ПОЛЬЗОВАТЬСЯ", 12f, muted, true), params(2, 9))
         val guide = card()
@@ -136,6 +140,12 @@ class MainActivity : Activity() {
             clipToPadding = false
             addView(page)
         })
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        sendBroadcast(Intent(FishAccessibilityService.ACTION_HIDE_OVERLAY).setPackage(packageName))
+        super.onBackPressed()
     }
 
     override fun onResume() {
