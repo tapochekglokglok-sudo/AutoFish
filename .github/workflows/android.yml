@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - 'AutoFishAndroid_cloud_build.zip'
+      - 'autofish-src/**'
       - '.github/workflows/android.yml'
 
 jobs:
