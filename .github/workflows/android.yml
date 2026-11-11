@@ -29,10 +29,12 @@ jobs:
           test -s project/app/src/main/assets/tessdata/rus.traineddata
           test -s project/app/src/main/assets/tessdata/eng.traineddata
 
-      - name: Apply current AutoFish service
+      - name: Apply current AutoFish service and fix old source
         run: |
           mkdir -p project/app/src/main/java/com/example/autofish
           cp autofish-src/app/src/main/java/com/example/autofish/FishAccessibilityService.kt project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
+          sed -i 's/it.recycle()/it.end()/g; s/tess?.recycle()/tess?.end()/g' project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
+          sed -i -E 's/textSize=([0-9]+)f?/textSize=\1f/g' project/app/src/main/java/com/example/autofish/MainActivity.kt
 
       - name: Configure Kotlin and OCR dependency
         run: |
