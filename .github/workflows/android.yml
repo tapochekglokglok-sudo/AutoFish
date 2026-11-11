@@ -20,6 +20,12 @@ jobs:
       - name: Extract project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
+      - name: Inspect MainActivity source
+        run: |
+          echo '===== MAIN ACTIVITY SOURCE START ====='
+          cat project/app/src/main/java/com/example/autofish/MainActivity.kt
+          echo '===== MAIN ACTIVITY SOURCE END ====='
+
       - name: Apply updated AutoFish service
         run: |
           mkdir -p project/app/src/main/java/com/example/autofish
