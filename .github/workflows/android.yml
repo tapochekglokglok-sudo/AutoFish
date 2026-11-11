@@ -32,6 +32,7 @@ jobs:
       - name: Build APK
         run: |
           cd project
+          sed -i 's/textSize=16/textSize=16f/; s/textSize=26/textSize=26f/' app/src/main/java/com/example/autofish/MainActivity.kt
           echo 'tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions.jvmTarget = "1.8" }' >> app/build.gradle.kts
           gradle assembleDebug
       - name: Upload APK
