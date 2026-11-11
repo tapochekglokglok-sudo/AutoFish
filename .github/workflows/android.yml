@@ -19,6 +19,11 @@ jobs:
       - name: Extract project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
+      - name: Apply updated AutoFish service
+        run: |
+          mkdir -p project/app/src/main/java/com/example/autofish
+          cp autofish-src/app/src/main/java/com/example/autofish/FishAccessibilityService.kt project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
+
       - name: Inspect app source
         run: |
           echo '===== MainActivity.kt ====='
