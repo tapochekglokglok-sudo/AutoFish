@@ -1,4 +1,3 @@
-
 name: Build AutoFish APK
 
 on:
@@ -9,36 +8,31 @@ on:
       - 'autofish-src/**'
       - '.github/workflows/android.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Download project
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Extract project
+      - name: Extract Android project
         run: unzip -o AutoFishAndroid_cloud_build.zip -d project
 
-      - name: Inspect MainActivity source
+      - name: Install OCR language models
         run: |
-          echo '===== MAIN ACTIVITY SOURCE START ====='
-          cat project/app/src/main/java/com/example/autofish/MainActivity.kt
-          echo '===== MAIN ACTIVITY SOURCE END ====='
+          mkdir -p project/app/src/main/assets/tessdata
+          curl -L --fail --retry 3 https://github.com/tesseract-ocr/tessdata_fast/raw/refs/heads/main/rus.traineddata -o project/app/src/main/assets/tessdata/rus.traineddata
+          curl -L --fail --retry 3 https://github.com/tesseract-ocr/tessdata_fast/raw/refs/heads/main/eng.traineddata -o project/app/src/main/assets/tessdata/eng.traineddata
+          test -s project/app/src/main/assets/tessdata/rus.traineddata
+          test -s project/app/src/main/assets/tessdata/eng.traineddata
 
-      - name: Apply updated AutoFish service
+      - name: Apply current AutoFish service
         run: |
           mkdir -p project/app/src/main/java/com/example/autofish
           cp autofish-src/app/src/main/java/com/example/autofish/FishAccessibilityService.kt project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt
-
-      - name: Inspect app source
-        run: |
-          echo '===== MainActivity.kt ====='
-          cat project/app/src/main/java/com/example/autofish/MainActivity.kt
-          echo '===== FishAccessibilityService.kt ====='
-          cat project/app/src/main/java/com/example/autofish/FishAccessibilityService.kt 2>/dev/null || true
-          echo '===== FishAccessibilityService.kt candidates ====='
-          find project/app/src/main -type f | sort
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -50,14 +44,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build APK
+
+      - name: Build debug APK
         run: |
           cd project
-          sed -i 's/textSize=16/textSize=16f/; s/textSize=26/textSize=26f/' app/src/main/java/com/example/autofish/MainActivity.kt
-          echo 'tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions.jvmTarget = "1.8" }' >> app/build.gradle.kts
-          gradle assembleDebug
+          gradle --no-daemon assembleDebug
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoFish-APK
-          path: project/**/build/outputs/apk/debug/*.apk
+          name: AutoFish-debug-apk
+          path: project/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
