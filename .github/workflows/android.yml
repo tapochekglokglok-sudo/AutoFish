@@ -62,6 +62,27 @@ jobs:
           print("SYSTEM_ALERT_WINDOW permission is present")
           PY
 
+      - name: Enable accessibility screenshots and gestures
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          config = Path("project/app/src/main/res/xml/accessibility_service.xml")
+          if not config.exists():
+              raise SystemExit("Accessibility service configuration not found")
+          tree = ET.parse(config)
+          root = tree.getroot()
+          android = "{http://schemas.android.com/apk/res/android}"
+          root.set(android + "canTakeScreenshot", "true")
+          root.set(android + "canPerformGestures", "true")
+          flags = root.get(android + "accessibilityFlags", "flagDefault")
+          flag_set = set(flags.split("|"))
+          flag_set.add("flagRetrieveInteractiveWindows")
+          root.set(android + "accessibilityFlags", "|".join(sorted(flag_set)))
+          tree.write(config, encoding="utf-8", xml_declaration=True)
+          print("Screenshot capture and gesture capabilities enabled")
+          PY
+
       - name: Install OCR language models
         run: |
           mkdir -p project/app/src/main/assets/tessdata
