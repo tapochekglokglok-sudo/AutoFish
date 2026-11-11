@@ -1,1 +1,45 @@
 
+name: Build AutoFish APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'AutoFishAndroid_cloud_build.zip'
+      - '.github/workflows/android.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download project
+        uses: actions/checkout@v4
+
+      - name: Extract project
+        run: |
+          unzip -o AutoFishAndroid_cloud_build.zip -d project
+          echo "Project extracted"
+          find project -maxdepth 3 -type f | head -50
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        run: |
+          cd project
+          find . -name gradlew -type f
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoFish-APK
+          path: project/**/build/outputs/apk/debug/*.apk
