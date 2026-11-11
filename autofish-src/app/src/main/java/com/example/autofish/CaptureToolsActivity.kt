@@ -90,7 +90,7 @@ class CaptureToolsActivity : Activity() {
    lines.add("$title: ${if(detected) "есть визуальные признаки" else "признаки не обнаружены"} ($feature; выборок $samples)")
   }
   lines.add("Важно: это предварительная проверка цвета внутри размеченных областей, не обученная нейросеть и не гарантия правильного распознавания.")
-  diagnostics.text=lines.joinToString("\\n")
+  diagnostics.text=lines.joinToString("\n")
   prefs.edit().putString("lastDiagnostics",diagnostics.text.toString()).apply()
  }
  private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
@@ -98,6 +98,7 @@ class CaptureToolsActivity : Activity() {
  private fun btn(s:String,a:()->Unit)=Button(this).apply{text=s;isAllCaps=false;setOnClickListener{a()}}
  private class RegionView(c:Context,val done:(RectF)->Unit):View(c){
   var region="cast"; private var imageBitmap:Bitmap?=null; private val dest=RectF(); private val box=RectF(); private val p=Paint(3); private var sx=0f; private var sy=0f
+  val bitmap:Bitmap? get()=imageBitmap
   fun setBitmap(b:Bitmap){imageBitmap=b;invalidate()}
   override fun onDraw(canvas:Canvas){canvas.drawColor(Color.rgb(24,31,48));val b=imageBitmap?:return;val k=min(width.toFloat()/b.width,height.toFloat()/b.height);val w=b.width*k;val h=b.height*k;dest.set((width-w)/2,(height-h)/2,(width+w)/2,(height+h)/2);canvas.drawBitmap(b,null,dest,p);if(!box.isEmpty){p.color=0x5533ccff;p.style=Paint.Style.FILL;canvas.drawRect(box,p);p.color=Color.CYAN;p.style=Paint.Style.STROKE;p.strokeWidth=3f;canvas.drawRect(box,p);p.style=Paint.Style.FILL}}
   override fun onTouchEvent(e:MotionEvent):Boolean{when(e.action){MotionEvent.ACTION_DOWN->{sx=e.x;sy=e.y;box.set(sx,sy,sx,sy);invalidate();return true};MotionEvent.ACTION_MOVE->{box.set(min(sx,e.x),min(sy,e.y),max(sx,e.x),max(sy,e.y));invalidate();return true};MotionEvent.ACTION_UP->{val b=imageBitmap?:return true;val l=max(dest.left,min(sx,e.x));val t=max(dest.top,min(sy,e.y));val r=min(dest.right,max(sx,e.x));val d=min(dest.bottom,max(sy,e.y));box.set(l,t,r,d);if(r-l>5&&d-t>5){val kx=b.width/dest.width();val ky=b.height/dest.height();done(RectF((l-dest.left)*kx,(t-dest.top)*ky,(r-dest.left)*kx,(d-dest.top)*ky))};invalidate();return true}};return true}
