@@ -12,6 +12,8 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
+import android.widget.CheckBox
+import android.widget.Toast
 import android.widget.ScrollView
 import android.widget.TextView
 
@@ -84,6 +86,13 @@ class MainActivity : Activity() {
         automationValue = statusLine(statusCard, "Автоматизация")
         page.addView(statusCard, params(0, 18))
 
+        page.addView(label("АВТОМАТИЧЕСКИЙ РЕЖИМ", 12f, muted, true), params(2, 9))
+        val modeCard = card()
+        modeCard.addView(label("Выбери, как AutoFish должен запускаться.", 13f, muted, false))
+        modeCard.addView(settingToggle("Запускать автоматически при открытии Roblox", "autoStartRoblox", false))
+        modeCard.addView(label("Если режим включён, служба AutoFish начнёт работу при обнаружении Roblox. Для этого должны быть включены специальные возможности и разрешение на оверлей.", 12f, orange, false), params(0, 4))
+        page.addView(modeCard, params(0, 18))
+
         page.addView(label("НАСТРОЙКА", 12f, muted, true), params(2, 9))
         page.addView(actionButton("1   Разрешить отображение поверх приложений", purple) {
             if (!Settings.canDrawOverlays(this)) {
@@ -94,7 +103,8 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, params(0, 9))
         page.addView(actionButton("Снимки экрана, запись и разметка", Color.rgb(67, 56, 202)) { startActivity(Intent(this, CaptureToolsActivity::class.java)) }, params(0, 10))
-        page.addView(actionButton("Обновить состояние", panelAlt) { refreshStatus() }, params(0, 18))
+        page.addView(actionButton("Обновить состояние", panelAlt) { refreshStatus() }, params(0, 9))
+        page.addView(actionButton("Показать журнал отслеживания", panelAlt) { showTrackingLog() }, params(0, 9))
         page.addView(actionButton("Остановить и убрать AF", Color.rgb(127, 29, 29)) {
             sendBroadcast(Intent(FishAccessibilityService.ACTION_HIDE_OVERLAY).setPackage(packageName))
             updateStatus()
@@ -107,6 +117,12 @@ class MainActivity : Activity() {
         addStep(guide, "03", "Запусти помощник", "Нажми AF. Повторное нажатие остановит работу. Кнопку можно перетаскивать в удобное место.")
         addStep(guide, "04", "Следи за статусом", "AF меняет вид при запуске. Не закрывай службу специальных возможностей во время игры.")
         page.addView(guide, params(0, 18))
+
+        page.addView(label("ОТСЛЕЖИВАНИЕ", 12f, muted, true), params(2, 9))
+        val tracking = card()
+        tracking.addView(label("AutoFish сохраняет последние 80 событий: обнаружение подсказок, этапы рыбалки и остановку автоматизации.", 13f, muted, false))
+        tracking.addView(actionButton("Открыть журнал событий", panelAlt) { showTrackingLog() }, params(0, 10))
+        page.addView(tracking, params(0, 18))
 
         page.addView(label("КАК РАБОТАЕТ АВТОРЫБАЛКА", 12f, muted, true), params(2, 9))
         val logic = card()
@@ -152,6 +168,35 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::overlayValue.isInitialized) refreshStatus()
+    }
+
+    private fun settingToggle(title: String, key: String, defaultValue: Boolean): CheckBox =
+        CheckBox(this).apply {
+            text = title
+            textSize = 14f
+            setTextColor(white)
+            buttonTintList = android.content.res.ColorStateList.valueOf(purple)
+            isChecked = prefs.getBoolean(key, defaultValue)
+            setPadding(0, dp(8), 0, dp(8))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(key, checked).apply()
+                refreshStatus()
+                Toast.makeText(this@MainActivity, if (checked) "Режим включён" else "Режим выключен", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+    private fun showTrackingLog() {
+        val log = prefs.getString("eventLog", "")?.takeIf { it.isNotBlank() } ?: "Событий пока нет. Запусти AutoFish и открой Roblox."
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Журнал AutoFish")
+            .setMessage(log)
+            .setPositiveButton("Закрыть", null)
+            .setNeutralButton("Скопировать") { _, _ ->
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AutoFish log", log))
+                Toast.makeText(this, "Журнал скопирован", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     private fun refreshStatus() {
