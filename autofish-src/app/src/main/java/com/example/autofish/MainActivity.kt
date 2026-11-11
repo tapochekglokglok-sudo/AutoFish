@@ -93,6 +93,7 @@ class MainActivity : Activity() {
         page.addView(actionButton("2   Включить специальные возможности", blue) {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, params(0, 9))
+        page.addView(actionButton("Снимки экрана, запись и разметка", Color.rgb(67, 56, 202)) { startActivity(Intent(this, CaptureToolsActivity::class.java)) }, params(0, 10))
         page.addView(actionButton("Обновить состояние", panelAlt) { refreshStatus() }, params(0, 18))
         page.addView(actionButton("Остановить и убрать AF", Color.rgb(127, 29, 29)) {
             sendBroadcast(Intent(FishAccessibilityService.ACTION_HIDE_OVERLAY).setPackage(packageName))
