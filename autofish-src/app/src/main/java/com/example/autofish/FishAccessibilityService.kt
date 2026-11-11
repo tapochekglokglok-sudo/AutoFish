@@ -32,7 +32,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 class FishAccessibilityService : AccessibilityService() {
-    companion object { const val ACTION_REFRESH_OVERLAY = "com.example.autofish.REFRESH_OVERLAY"; const val ACTION_HIDE_OVERLAY = "com.example.autofish.HIDE_OVERLAY" }
+    companion object { const val ACTION_REFRESH_OVERLAY = "com.example.autofish.REFRESH_OVERLAY"; const val ACTION_HIDE_OVERLAY = "com.example.autofish.HIDE_OVERLAY"; const val ACTION_CAPTURE = "com.example.autofish.CAPTURE"; const val ACTION_RECORD_START = "com.example.autofish.RECORD_START"; const val ACTION_RECORD_STOP = "com.example.autofish.RECORD_STOP"; const val ACTION_CAPTURED = "com.example.autofish.CAPTURED" }
     private enum class Stage { WAIT_CAST, HOLDING, WAIT_PERFECT, WAIT_FAST, FAST_TAP }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -49,10 +49,16 @@ class FishAccessibilityService : AccessibilityService() {
     private var bubble: TextView? = null
     private var receiverRegistered = false
     private var tess: TessBaseAPI? = null
+    private var recording = false
+    private var recordingIndex = 0
+    private val captureDir by lazy { File(filesDir, "autofish_capture").apply { mkdirs() } }
     private val prefs by lazy { getSharedPreferences("fish", MODE_PRIVATE) }
 
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ACTION_CAPTURE) { captureFrame(false); return }
+            if (intent?.action == ACTION_RECORD_START) { startRecording(); return }
+            if (intent?.action == ACTION_RECORD_STOP) { stopRecording(); return }
             if (intent?.action == ACTION_HIDE_OVERLAY) {
                 stopAutomation()
                 removeBubble()
@@ -64,7 +70,7 @@ class FishAccessibilityService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
-        val filter = IntentFilter(ACTION_REFRESH_OVERLAY).apply { addAction(ACTION_HIDE_OVERLAY) }
+        val filter = IntentFilter(ACTION_REFRESH_OVERLAY).apply { addAction(ACTION_HIDE_OVERLAY); addAction(ACTION_CAPTURE); addAction(ACTION_RECORD_START); addAction(ACTION_RECORD_STOP) }
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(refreshReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -93,7 +99,7 @@ class FishAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        stopAutomation(); removeBubble(); tess?.recycle(); tess = null
+        stopAutomation(); stopRecording(); removeBubble(); tess?.recycle(); tess = null
         if (receiverRegistered) unregisterReceiver(refreshReceiver)
         super.onDestroy()
     }
@@ -187,6 +193,52 @@ class FishAccessibilityService : AccessibilityService() {
                 override fun onFailure(errorCode: Int) { busy.set(false); schedule(250) }
             })
         }
+    }
+
+
+    private fun startRecording() {
+        if (Build.VERSION.SDK_INT < 30) return
+        recording = true
+        recordingIndex = captureDir.listFiles()?.count { it.name.startsWith("frame_") } ?: 0
+        handler.removeCallbacks(recordLoop)
+        handler.post(recordLoop)
+    }
+    private fun stopRecording() { recording = false; handler.removeCallbacks(recordLoop) }
+    private val recordLoop = object : Runnable {
+        override fun run() {
+            if (!recording) return
+            captureFrame(true)
+            if (recording) handler.postDelayed(this, 850)
+        }
+    }
+    private fun captureFrame(saveAsRecording: Boolean) {
+        if (Build.VERSION.SDK_INT < 30 || !busy.compareAndSet(false, true)) return
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(result: ScreenshotResult) {
+                try {
+                    val buffer = result.hardwareBuffer
+                    val wrapped = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                    buffer.close()
+                    if (wrapped == null) { busy.set(false); return }
+                    val bitmap = wrapped.copy(Bitmap.Config.ARGB_8888, false)
+                    wrapped.recycle()
+                    try {
+                        FileOutputStream(File(captureDir, "latest.png")).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        if (saveAsRecording && recording) {
+                            FileOutputStream(File(captureDir, "frame_%05d.jpg".format(recordingIndex++))).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 82, it) }
+                            val frames = captureDir.listFiles()?.filter { it.name.startsWith("frame_") }?.sortedBy { it.name } ?: emptyList()
+                            if (frames.size > 120) frames.take(frames.size - 120).forEach { it.delete() }
+                        }
+                    } finally { bitmap.recycle(); busy.set(false) }
+                    sendBroadcast(Intent(ACTION_CAPTURED).setPackage(packageName))
+                } catch (_: Exception) { busy.set(false) }
+            }
+            override fun onFailure(errorCode: Int) {
+                busy.set(false)
+                prefs.edit().putInt("lastScreenshotError", errorCode).apply()
+                sendBroadcast(Intent(ACTION_CAPTURED).setPackage(packageName))
+            }
+        })
     }
 
     private fun processFrame(bitmap: Bitmap) {
